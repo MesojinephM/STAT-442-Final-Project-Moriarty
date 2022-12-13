@@ -1,0 +1,171 @@
+---
+title: "final project"
+author: "Marie Moriarty"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Import and clean Data
+```{r data cleaning}
+
+# Import data sets
+library(readr)
+library(ggplot2)
+library(RColorBrewer)
+library(mapproj)
+library(dplyr)
+library(spdep)
+library(ggnewscale)
+library(corrplot)
+
+
+soil <- read_csv("2017 Soil Sampling.csv")
+
+harvest <- read_csv("2021 Harvest.csv")
+
+planting <- read_csv("2021 Planting.csv", 
+                     col_types = cols(Time = col_skip())) 
+
+
+#Drop unnecessary columns (essentially no variation)
+harvest <- harvest[,-c(3:5, 7, 9, 12, 27)]
+
+# Drop extreme values in yield column of harvest set
+min_yield = 20
+max_yield = 100
+
+harvest <- harvest %>% 
+  mutate(`Yld Vol(Dry)(bu/ac)` = 
+           ifelse(`Yld Vol(Dry)(bu/ac)` < min_yield, NA, `Yld Vol(Dry)(bu/ac)`)) %>%
+  mutate(`Yld Vol(Dry)(bu/ac)` = 
+           ifelse(`Yld Vol(Dry)(bu/ac)` > max_yield, NA, `Yld Vol(Dry)(bu/ac)`)) %>%
+  na.omit()
+
+
+# View summary stats
+summary(harvest)
+
+```
+
+### Create Correlation plot for all variables
+```{r correlation}
+
+# create correlation matrix for harvest data
+harvest_matrix <- cor(harvest)
+corrplot(harvest_matrix, 
+         method = 'circle', 
+         type = 'upper',
+         title = "Correlation matrix for harvest variables")
+```
+
+### Exploratory Maps
+```{r initial maps}
+# Create yield map
+dry_vols <- ggplot(harvest, aes(Longitude,Latitude)) +
+  geom_point(aes(Longitude, 
+                 Latitude, 
+                 color = `Yld Vol(Dry)(bu/ac)`), 
+             size = 1) +
+  scale_color_gradient2(name="Dry yield (bu/ac)", 
+                        low = "firebrick3",
+                        mid = "yellow",
+                        high = "forestgreen",
+                        midpoint = 63) +
+  coord_map('mercator') +
+  ggtitle("Yield Volume (Dry) 2021 Soybeans") +
+  theme_bw()
+
+dry_vols # Print map
+
+#Create elevation map
+elev <- ggplot(harvest, aes(Longitude,Latitude)) +
+  geom_point(data = harvest, 
+             aes(color=`Elevation(ft)`), 
+             size = 1) +
+  scale_color_gradientn(name="Elevation (ft)", 
+                        colors=brewer.pal(n=9, name = 'Greens')) +
+  coord_map('mercator') +
+  ggtitle("Rickard Field Elevation") +
+  theme_bw()
+
+elev  # Plot map
+
+#Create speed map
+speed_map <- ggplot(harvest, aes(Longitude,Latitude)) +
+  geom_point(aes(color=`Speed(mph)`), 
+             size = 1) +
+  scale_color_gradientn(name="Speed (mph)", 
+                        colors=brewer.pal(n=9, name = 'Blues')) +
+  coord_map('mercator') +
+  ggtitle("Rickard Field Speed") +
+  theme_bw()
+
+speed_map # Plot map
+
+#Create moisture map
+moisture_map <- ggplot(harvest, aes(Longitude,Latitude)) +
+  geom_point(aes(color=`Moisture(%)`), 
+             size = 1) +
+  scale_color_gradientn(name="Moisture (%)", 
+                        colors=brewer.pal(n=9, name = 'Oranges')) +
+  coord_map('mercator') +
+  ggtitle("Rickard Field Moisture Percentage") +
+  theme_bw()
+
+moisture_map # Plot map
+
+```
+
+
+### Global and Local Moran's I
+```{r moran}
+
+# Use k nearest neighbors to create weight matrix
+nlistk <- knn2nb(knearneigh(harvest, k = 9))
+W.kW <- nb2listw(nlistk, style = "B")
+
+# Global Moran's I test to calculate spatial autocorrelation for yield
+
+moran.test(harvest$`Yld Vol(Dry)(bu/ac)`,
+           W.kW,
+           alternative = "two.sided",
+           randomisation = FALSE)
+
+moran.plot(harvest$`Yld Vol(Dry)(bu/ac)`,
+           W.kW)
+
+# Local Moran's I for yield
+local_yield <- localmoran(harvest$`Yld Vol(Dry)(bu/ac)`,
+                       W.kW,
+                       alternative = "two.sided")
+
+hist(local_yield[,1]) # Histogram of local Moran's I values
+
+harvest <- cbind(harvest, local_yield) # Merge local moran's I set with harvest data
+
+# Plot significant Local Moran's I over yield map
+sig_map2 <- ggplot() +
+  geom_point(harvest, mapping = aes(Longitude, Latitude, 
+                                    color = `Yld Vol(Dry)(bu/ac)`), size = 1) +
+  scale_color_gradient2(name="Dry yield (bu/ac)", 
+                        low = "firebrick3",
+                        mid = "yellow",
+                        high = "forestgreen",
+                        midpoint = 63) +
+  new_scale_color() +
+  geom_point(harvest[which(harvest$`Pr(z != E(Ii))` < 0.01 &
+                             harvest$Ii > 0),],
+             mapping = aes(Longitude, Latitude,
+                           color = `Pr(z != E(Ii))`), 
+             size = .75, alpha = 0.5) +
+  scale_colour_gradientn(name = "Significant Local Moran's I p-values",
+                         colours = c("blue", "lightblue")) +
+  coord_map('mercator') +
+  ggtitle("Yield Volume (Dry) 2021 Soybeans with significant local Moran's I values") +
+  theme_bw()
+sig_map2 # Print map
+```
